@@ -1,6 +1,6 @@
 
-                        The XQuick readme.txt file
-
+The XQuick readme.txt file
+=
 
 XQuick: Application for Reserve Copy with GUI Interface. Easy Open - Easy Use!
 ==============================================================================
