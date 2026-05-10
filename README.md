@@ -163,5 +163,5 @@ You are free to use, modify, distribute, and share this software without restric
 ---
 
 <p align="center">
-Made with ❤️ by STTIP Show
+Made with ❤️ by Deaq
 </p>
