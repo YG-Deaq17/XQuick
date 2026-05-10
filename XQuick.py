@@ -103,7 +103,11 @@ def backup_info_from_path(path: Path) -> BackupInfo:
     )
 
 
-def create_zip_backup(source: Path, progress_callback=None) -> BackupInfo:
+class BackupCancelled(Exception):
+    pass
+
+
+def create_zip_backup(source: Path, progress_callback=None, should_cancel=None) -> BackupInfo:
     ensure_dirs()
     source = source.resolve()
     if not source.exists():
@@ -113,10 +117,15 @@ def create_zip_backup(source: Path, progress_callback=None) -> BackupInfo:
     backup_root = BACKUP_DIR.resolve()
     members: list[tuple[Path, Path]] = []
 
+    if should_cancel and should_cancel():
+        raise BackupCancelled("Создание бэкапа прервано")
+
     if source.is_file():
         members.append((source, Path(source.name)))
     else:
         for root, _, files in os.walk(source):
+            if should_cancel and should_cancel():
+                raise BackupCancelled("Создание бэкапа прервано")
             root_path = Path(root).resolve()
             if backup_root == root_path or backup_root in root_path.parents:
                 continue
@@ -128,14 +137,21 @@ def create_zip_backup(source: Path, progress_callback=None) -> BackupInfo:
     if progress_callback:
         progress_callback(0, total, "Подготовка архива...")
 
-    with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        if not members:
-            if progress_callback:
-                progress_callback(1, total, "Папка пуста, создан пустой архив")
-        for index, (file_path, arcname) in enumerate(members, start=1):
-            archive.write(file_path, arcname)
-            if progress_callback:
-                progress_callback(index, total, file_path.name)
+    try:
+        with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            if not members:
+                if progress_callback:
+                    progress_callback(1, total, "Папка пуста, создан пустой архив")
+            for index, (file_path, arcname) in enumerate(members, start=1):
+                if should_cancel and should_cancel():
+                    raise BackupCancelled("Создание бэкапа прервано")
+                archive.write(file_path, arcname)
+                if progress_callback:
+                    progress_callback(index, total, str(arcname))
+    except BackupCancelled:
+        if backup_path.exists():
+            backup_path.unlink()
+        raise
 
     return backup_info_from_path(backup_path)
 
@@ -165,16 +181,26 @@ class BackupWorker(QThread):
     progress_changed = pyqtSignal(int, int, str)
     backup_finished = pyqtSignal(object)
     backup_failed = pyqtSignal(str)
+    backup_cancelled = pyqtSignal()
 
     def __init__(self, source_path: Path) -> None:
         super().__init__()
         self.source_path = source_path
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
+    def is_cancelled(self) -> bool:
+        return self._cancel_requested
 
     def run(self) -> None:
         try:
             self.progress_changed.emit(0, 0, "Подготовка списка файлов...")
-            backup = create_zip_backup(self.source_path, self.progress_changed.emit)
+            backup = create_zip_backup(self.source_path, self.progress_changed.emit, self.is_cancelled)
             self.backup_finished.emit(backup)
+        except BackupCancelled:
+            self.backup_cancelled.emit()
         except Exception as error:
             self.backup_failed.emit(str(error))
 
@@ -267,39 +293,60 @@ class BackupProgressDialog(QDialog):
         self.setWindowTitle("Создание бэкапа")
         self.setModal(True)
         self.setObjectName("backupProgressDialog")
-        self.setFixedWidth(460)
+        self.setFixedWidth(560)
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(14)
+        layout.setContentsMargins(26, 24, 26, 24)
+        layout.setSpacing(12)
 
         title = QLabel("Создание бэкапа")
         title.setObjectName("progressTitle")
-        self.status_label = QLabel("Подготовка...")
+        self.phase_label = QLabel("Этап: подготовка")
+        self.phase_label.setObjectName("progressPhase")
+        self.status_label = QLabel("Ожидание запуска...")
         self.status_label.setObjectName("progressStatus")
         self.status_label.setWordWrap(True)
+        self.stream_box = QTextEdit()
+        self.stream_box.setObjectName("progressStream")
+        self.stream_box.setReadOnly(True)
+        self.stream_box.setFixedHeight(110)
         self.counter_label = QLabel("")
         self.counter_label.setObjectName("muted")
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("backupProgressBar")
         self.progress_bar.setRange(0, 0)
+        self.cancel_button = make_button("Прервать операцию", "progressCancelButton")
 
         layout.addWidget(title)
+        layout.addWidget(self.phase_label)
         layout.addWidget(self.status_label)
+        layout.addWidget(self.stream_box)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.counter_label)
+        layout.addWidget(self.cancel_button, alignment=Qt.AlignmentFlag.AlignRight)
 
     def update_progress(self, done: int, total: int, current_file: str) -> None:
-        self.status_label.setText(current_file)
+        if current_file:
+            self.status_label.setText(current_file)
+            self.stream_box.append(current_file)
+            self.stream_box.moveCursor(self.stream_box.textCursor().MoveOperation.End)
         if total <= 0:
+            self.phase_label.setText("Этап: сканирование файлов")
             self.progress_bar.setRange(0, 0)
             self.counter_label.setText("Подготовка...")
             return
+        self.phase_label.setText("Этап: упаковка файлов в архив")
         self.progress_bar.setRange(0, total)
         self.progress_bar.setValue(done)
         percent = int((done / total) * 100) if total else 0
         self.counter_label.setText(f"{done} из {total} файлов · {percent}%")
+
+    def mark_cancelling(self) -> None:
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setText("Прерывание...")
+        self.phase_label.setText("Этап: остановка операции")
+        self.status_label.setText("Дожидаемся завершения текущего файла и удаляем недописанный архив...")
 
     def closeEvent(self, event) -> None:
         event.ignore()
@@ -786,12 +833,20 @@ class XQuickWindow(QMainWindow):
 
         self.backup_progress = BackupProgressDialog(self)
         self.backup_worker = BackupWorker(self.source_path)
+        self.backup_progress.cancel_button.clicked.connect(self._cancel_backup_creation)
         self.backup_worker.progress_changed.connect(self._update_backup_progress)
         self.backup_worker.backup_finished.connect(self._backup_created)
         self.backup_worker.backup_failed.connect(self._backup_failed)
+        self.backup_worker.backup_cancelled.connect(self._backup_cancelled)
         self.backup_worker.finished.connect(self._backup_worker_finished)
         self.backup_progress.show()
         self.backup_worker.start()
+
+    def _cancel_backup_creation(self) -> None:
+        if self.backup_progress:
+            self.backup_progress.mark_cancelling()
+        if self.backup_worker and self.backup_worker.isRunning():
+            self.backup_worker.cancel()
 
     def _update_backup_progress(self, done: int, total: int, current_file: str) -> None:
         if self.backup_progress:
@@ -805,6 +860,14 @@ class XQuickWindow(QMainWindow):
         write_log("УСПЕХ", f"Бэкап успешно создан: {backup.name}")
         self.refresh_all()
         show_message(self, "Бэкап создан.", "info")
+
+    def _backup_cancelled(self) -> None:
+        if self.backup_progress:
+            self.backup_progress.done(0)
+            self.backup_progress = None
+        write_log("ИНФО", "Создание бэкапа прервано пользователем")
+        self.refresh_all()
+        show_message(self, "Создание бэкапа прервано. Недописанный архив удалён.", "warning")
 
     def _backup_failed(self, error: str) -> None:
         if self.backup_progress:
@@ -1177,14 +1240,32 @@ QTextEdit {
     color: #f5f7fb;
     font-size: 15px;
 }
+#backupProgressDialog {
+    background: #181d23;
+    color: #f5f7fb;
+}
 #progressTitle {
     color: #f5f7fb;
     font-size: 18px;
     font-weight: 800;
 }
+#progressPhase {
+    color: #1e90ff;
+    font-size: 13px;
+    font-weight: 700;
+}
 #progressStatus {
     color: #d9dee7;
     font-size: 13px;
+}
+#progressStream {
+    background: #11151a;
+    color: #d9dee7;
+    border: 1px solid #343a43;
+    border-radius: 8px;
+    font-family: Consolas;
+    font-size: 12px;
+    padding: 8px;
 }
 QProgressBar#backupProgressBar {
     background: #11151a;
@@ -1198,6 +1279,18 @@ QProgressBar#backupProgressBar {
 QProgressBar#backupProgressBar::chunk {
     background: #1e90ff;
     border-radius: 7px;
+}
+#progressCancelButton {
+    background: #382020;
+    border-color: #5a2d2d;
+    min-width: 190px;
+    min-height: 46px;
+}
+#progressCancelButton:hover {
+    background: #4a2525;
+}
+#progressCancelButton:pressed {
+    background: #612b2b;
 }
 #dialogIcon_info, #dialogIcon_question {
     background: #1e90ff;
