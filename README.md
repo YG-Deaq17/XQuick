@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.14.4-blue">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue">
   <img src="https://img.shields.io/badge/Version-v1.0.2-green">
   <img src="https://img.shields.io/badge/Platform-Windows-lightgrey">
   <img src="https://img.shields.io/badge/License-Unlicense-yellow">
@@ -88,14 +88,14 @@ pip install -r requirements.txt
 ### Run application
 
 ```bash
-python main.py
+python XQuick.py
 ```
 
 ---
 
 ## Requirements
 
-- Python **3.14.4**
+- Python **3.10+**
 - Windows OS
 - Dependencies from `requirements.txt`
 
