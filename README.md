@@ -1,7 +1,7 @@
 # XQuick
 
 <p align="center">
-  <img src="assets/XQuick.png" width="128" alt="XQuick Logo">
+  <img src="assets/XQuickUI.png" width="128" alt="XQuick Logo">
 </p>
 
 <h1 align="center">XQuick v1.0.2 Release latest</h1>
