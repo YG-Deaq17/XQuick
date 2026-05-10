@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRect, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -92,7 +93,17 @@ def list_backups() -> list[BackupInfo]:
     return sorted(items, key=lambda item: item.created_at)
 
 
-def create_zip_backup(source: Path) -> BackupInfo:
+def backup_info_from_path(path: Path) -> BackupInfo:
+    stat = path.stat()
+    return BackupInfo(
+        path=path,
+        name=path.name,
+        size=stat.st_size,
+        created_at=datetime.fromtimestamp(stat.st_ctime),
+    )
+
+
+def create_zip_backup(source: Path, progress_callback=None) -> BackupInfo:
     ensure_dirs()
     source = source.resolve()
     if not source.exists():
@@ -100,20 +111,33 @@ def create_zip_backup(source: Path) -> BackupInfo:
 
     backup_path = BACKUP_DIR / f"backup_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.zip"
     backup_root = BACKUP_DIR.resolve()
+    members: list[tuple[Path, Path]] = []
+
+    if source.is_file():
+        members.append((source, Path(source.name)))
+    else:
+        for root, _, files in os.walk(source):
+            root_path = Path(root).resolve()
+            if backup_root == root_path or backup_root in root_path.parents:
+                continue
+            for filename in files:
+                file_path = root_path / filename
+                members.append((file_path, file_path.relative_to(source.parent)))
+
+    total = max(1, len(members))
+    if progress_callback:
+        progress_callback(0, total, "Подготовка архива...")
 
     with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        if source.is_file():
-            archive.write(source, source.name)
-        else:
-            for root, _, files in os.walk(source):
-                root_path = Path(root).resolve()
-                if backup_root == root_path or backup_root in root_path.parents:
-                    continue
-                for filename in files:
-                    file_path = root_path / filename
-                    archive.write(file_path, file_path.relative_to(source.parent))
+        if not members:
+            if progress_callback:
+                progress_callback(1, total, "Папка пуста, создан пустой архив")
+        for index, (file_path, arcname) in enumerate(members, start=1):
+            archive.write(file_path, arcname)
+            if progress_callback:
+                progress_callback(index, total, file_path.name)
 
-    return list_backups()[-1]
+    return backup_info_from_path(backup_path)
 
 
 def safe_extract_zip(backup: Path, target: Path) -> None:
@@ -135,6 +159,24 @@ def open_in_file_manager(path: Path) -> None:
         subprocess.Popen(["open", str(path)])
     else:
         subprocess.Popen(["xdg-open", str(path)])
+
+
+class BackupWorker(QThread):
+    progress_changed = pyqtSignal(int, int, str)
+    backup_finished = pyqtSignal(object)
+    backup_failed = pyqtSignal(str)
+
+    def __init__(self, source_path: Path) -> None:
+        super().__init__()
+        self.source_path = source_path
+
+    def run(self) -> None:
+        try:
+            self.progress_changed.emit(0, 0, "Подготовка списка файлов...")
+            backup = create_zip_backup(self.source_path, self.progress_changed.emit)
+            self.backup_finished.emit(backup)
+        except Exception as error:
+            self.backup_failed.emit(str(error))
 
 
 class ImpactButton(QPushButton):
@@ -219,6 +261,50 @@ class AppDialog(QDialog):
         layout.addLayout(buttons)
 
 
+class BackupProgressDialog(QDialog):
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Создание бэкапа")
+        self.setModal(True)
+        self.setObjectName("backupProgressDialog")
+        self.setFixedWidth(460)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("Создание бэкапа")
+        title.setObjectName("progressTitle")
+        self.status_label = QLabel("Подготовка...")
+        self.status_label.setObjectName("progressStatus")
+        self.status_label.setWordWrap(True)
+        self.counter_label = QLabel("")
+        self.counter_label.setObjectName("muted")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("backupProgressBar")
+        self.progress_bar.setRange(0, 0)
+
+        layout.addWidget(title)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.counter_label)
+
+    def update_progress(self, done: int, total: int, current_file: str) -> None:
+        self.status_label.setText(current_file)
+        if total <= 0:
+            self.progress_bar.setRange(0, 0)
+            self.counter_label.setText("Подготовка...")
+            return
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(done)
+        percent = int((done / total) * 100) if total else 0
+        self.counter_label.setText(f"{done} из {total} файлов · {percent}%")
+
+    def closeEvent(self, event) -> None:
+        event.ignore()
+
+
 def show_message(parent: QWidget, message: str, kind: str = "info") -> None:
     dialog = AppDialog(parent, APP_NAME, message, kind=kind)
     dialog.exec()
@@ -258,6 +344,8 @@ class XQuickWindow(QMainWindow):
         self.backups: list[BackupInfo] = []
         self.selected_backup: BackupInfo | None = None
         self.nav_buttons: dict[str, QPushButton] = {}
+        self.backup_worker: BackupWorker | None = None
+        self.backup_progress: BackupProgressDialog | None = None
 
         self.setWindowTitle(APP_NAME)
         if ICON_FILE.exists():
@@ -692,16 +780,44 @@ class XQuickWindow(QMainWindow):
             self.show_page("create")
             show_message(self, "Сначала выберите папку или файл для бэкапа.", "warning")
             return
-        try:
-            backup = create_zip_backup(self.source_path)
-            self.selected_backup = backup
-            write_log("УСПЕХ", f"Бэкап успешно создан: {backup.name}")
-            self.refresh_all()
-            show_message(self, "Бэкап создан.", "info")
-        except Exception as error:
-            write_log("ОШИБКА", f"Не удалось создать бэкап: {error}")
-            self.refresh_all()
-            show_message(self, str(error), "error")
+        if self.backup_worker and self.backup_worker.isRunning():
+            show_message(self, "Создание бэкапа уже выполняется.", "warning")
+            return
+
+        self.backup_progress = BackupProgressDialog(self)
+        self.backup_worker = BackupWorker(self.source_path)
+        self.backup_worker.progress_changed.connect(self._update_backup_progress)
+        self.backup_worker.backup_finished.connect(self._backup_created)
+        self.backup_worker.backup_failed.connect(self._backup_failed)
+        self.backup_worker.finished.connect(self._backup_worker_finished)
+        self.backup_progress.show()
+        self.backup_worker.start()
+
+    def _update_backup_progress(self, done: int, total: int, current_file: str) -> None:
+        if self.backup_progress:
+            self.backup_progress.update_progress(done, total, current_file)
+
+    def _backup_created(self, backup: BackupInfo) -> None:
+        if self.backup_progress:
+            self.backup_progress.done(0)
+            self.backup_progress = None
+        self.selected_backup = backup
+        write_log("УСПЕХ", f"Бэкап успешно создан: {backup.name}")
+        self.refresh_all()
+        show_message(self, "Бэкап создан.", "info")
+
+    def _backup_failed(self, error: str) -> None:
+        if self.backup_progress:
+            self.backup_progress.done(0)
+            self.backup_progress = None
+        write_log("ОШИБКА", f"Не удалось создать бэкап: {error}")
+        self.refresh_all()
+        show_message(self, error, "error")
+
+    def _backup_worker_finished(self) -> None:
+        if self.backup_worker:
+            self.backup_worker.deleteLater()
+            self.backup_worker = None
 
     def restore_selected_or_latest(self) -> None:
         backup = self.selected_backup or (self.backups[-1] if self.backups else None)
@@ -1060,6 +1176,28 @@ QTextEdit {
 #dialogText {
     color: #f5f7fb;
     font-size: 15px;
+}
+#progressTitle {
+    color: #f5f7fb;
+    font-size: 18px;
+    font-weight: 800;
+}
+#progressStatus {
+    color: #d9dee7;
+    font-size: 13px;
+}
+QProgressBar#backupProgressBar {
+    background: #11151a;
+    color: #f5f7fb;
+    border: 1px solid #343a43;
+    border-radius: 8px;
+    min-height: 22px;
+    text-align: center;
+    font-weight: 700;
+}
+QProgressBar#backupProgressBar::chunk {
+    background: #1e90ff;
+    border-radius: 7px;
 }
 #dialogIcon_info, #dialogIcon_question {
     background: #1e90ff;
