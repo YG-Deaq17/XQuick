@@ -4,15 +4,16 @@
   <img src="assets/XQuickGUI.png" width="128" alt="XQuick Logo">
 </p>
 
-<h1 align="center">XQuick v1.0.2 Release latest</h1>
+<h1 align="center">XQuick v1.1.0 Release latest</h1>
 
 <p align="center">
   Fast and simple backup utility with GUI interface.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10+-blue">
-  <img src="https://img.shields.io/badge/Version-v1.0.2-green">
+  <img src="https://img.shields.io/badge/Required Python-3.10+-blue">
+  <img src="https://img.shields.io/badge/Work on last Python-3.14.4-purple">
+  <img src="https://img.shields.io/badge/Version-v1.1.0-green">
   <img src="https://img.shields.io/badge/Platform-Windows-lightgrey">
   <img src="https://img.shields.io/badge/License-Unlicense-yellow">
 </p>
@@ -136,10 +137,10 @@ Instead of manually copying files or using complicated commands, XQuick provides
 - [x] Logging support
 - [x] GUI interface
 - [x] Portable version
-- [ ] Analizyng backups
-- [ ] English language
-- [ ] Choose of Themes
-- [ ] Scheduled backups
+- [x] Analizyng backups
+- [x] English language
+- [x] Choose of Themes
+- [ ] Scheduled backups -> In development...
 
 
 ---
