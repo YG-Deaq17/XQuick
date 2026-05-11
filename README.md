@@ -34,7 +34,8 @@ The main goal of XQuick is to make local backup management simple, fast, and con
 
 ✅ Quick backup creation  
 ✅ Easy backup restoration  
-✅ Delete old backups  
+✅ Delete old backups
+✅ Checking and Analizing
 ✅ Logging system  
 ✅ Simple graphical interface  
 ✅ Folder selection dialog  
