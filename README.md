@@ -39,7 +39,7 @@ The main goal of XQuick is to make local backup management simple, fast, and con
 ✅ Logging system  
 ✅ Simple graphical interface  
 ✅ Folder selection dialog  
-✅ Drag & Drop support *(if enabled)*  
+✅ Drag & Drop support
 ✅ Lightweight and fast
 
 ---
