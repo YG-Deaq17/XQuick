@@ -48,27 +48,38 @@ The main goal of XQuick is to make local backup management simple, fast, and con
 ### Main Window
 
 <p align="center">
-  <img src="assets/main.png" width="750">
+  <img src="assets/EnglishMenu.png" width="750">
 </p>
 
 ### Backup Creation
 
 <p align="center">
-  <img src="assets/backup.png" width="750">
+  <img src="assets/EnglishCreate.png" width="750">
 </p>
 
 ### Restore Section
 
 <p align="center">
-  <img src="assets/restore.png" width="750">
+  <img src="assets/EnglishResotre.png" width="750">
 </p>
 
-### Logs
+### Analizing Section
 
 <p align="center">
-  <img src="assets/logs.png" width="750">
+  <img src="assets/EnglishAnalizing.png" width="750">
 </p>
 
+### Logs & Setting
+
+<p align="center">
+  <img src="assets/EnglishSetting.png" width="750">
+</p>
+
+### White Theme
+
+<p align="center">
+  <img src="assets/EnglishWhiteTheme.png" width="750">
+</p>
 ---
 
 ## Installation
